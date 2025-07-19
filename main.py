@@ -1,71 +1,89 @@
-import cv2
-import numpy as np
-import math
-import sys
+"""
+Panoramic Image Stitching Tool – Requirements Specification
 
+Purpose:
 
-def compute_focal_length(width, fov_deg):
-    """Compute focal length from image width and horizontal FOV."""
-    return width / (2.0 * math.tan(math.radians(fov_deg) / 2.0))
+This tool takes four input images and produces a single stitched output image,
+with seamless transitions between the source images.
 
+Functional Requirements:
 
-def warp_cylindrical_with_yaw(img, f, yaw_rad, output_width):
-    """Warp an image onto a cylindrical surface and rotate by yaw."""
-    h, w = img.shape[:2]
-    # create mesh grid of pixel coordinates
-    y_i, x_i = np.indices((h, w))
-    x_c = (x_i - w / 2.0) / f
-    y_c = (y_i - h / 2.0) / f
-    phi = np.arctan(x_c) + yaw_rad
-    # cylindrical vertical coordinate
-    rho = y_c / np.sqrt(x_c ** 2 + 1)
+Input Handling
 
-    xp = f * phi + output_width / 2.0
-    yp = f * rho + h / 2.0
+[FR-01] Accept exactly four input images.
 
-    map_x = xp.astype(np.float32)
-    map_y = yp.astype(np.float32)
-    warped = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-    mask = cv2.remap(np.full((h, w), 255, dtype=np.uint8), map_x, map_y, cv2.INTER_NEAREST,
-                     borderMode=cv2.BORDER_CONSTANT)
-    return warped, mask
+[FR-02] Support standard image formats (e.g. JPG, PNG, BMP).
 
+[FR-03] All input images must have the same resolution.
 
-def blend(base, overlay, mask):
-    """Simple overlay blend using mask."""
-    mask3 = mask[:, :, None].astype(bool)
-    base[mask3] = overlay[mask3]
-    return base
+[FR-04] Optional input: calibration data (intrinsics, distortion, orientation).
 
+Preprocessing
 
-def main():
-    if len(sys.argv) != 6:
-        print("Usage: python main.py cam1.jpg cam2.jpg cam3.jpg cam4.jpg output.jpg")
-        return
+[FR-05] Apply lens distortion correction if parameters are provided.
 
-    image_paths = sys.argv[1:5]
-    images = [cv2.imread(p) for p in image_paths]
-    if any(img is None for img in images):
-        print("Error reading input images")
-        return
+[FR-06] Rectify or project each image (e.g. perspective, cylindrical).
 
-    h, w = images[0].shape[:2]
-    f = compute_focal_length(w, 120.0)
-    panorama_width = int(2 * math.pi * f)
+[FR-07] Allow user-defined camera orientations/positions.
 
-    panorama = np.zeros((h, panorama_width, 3), dtype=images[0].dtype)
-    mask_total = np.zeros((h, panorama_width), dtype=np.uint8)
+Stitching and Blending
 
-    yaw_angles = [0, 90, 180, 270]
-    for img, yaw_deg in zip(images, yaw_angles):
-        yaw_rad = math.radians(yaw_deg)
-        warped, mask = warp_cylindrical_with_yaw(img, f, yaw_rad, panorama_width)
-        panorama = blend(panorama, warped, mask)
-        mask_total = cv2.max(mask_total, mask)
+[FR-08] Determine image overlap from configuration or estimates.
 
-    cv2.imwrite(sys.argv[5], panorama)
-    print("Saved", sys.argv[5])
+[FR-09] Align images using:
+a. Predefined transformation matrices OR
+b. Feature-based matching (e.g. ORB/SIFT).
 
+[FR-10] Blend overlapping regions using:
+a. Feathering
+b. Multiband blending
+c. Exposure matching (optional)
 
-if __name__ == "__main__":
-    main()
+Output
+
+[FR-11] Produce a single stitched image as output.
+
+[FR-12] Output image must have smooth visual transitions (no seams).
+
+[FR-13] Support exporting as PNG, JPG (at minimum).
+
+[FR-14] Allow configurable output resolution.
+
+Non-Functional Requirements:
+
+[NFR-01] Support 4K inputs with < 60 sec processing time (reference desktop).
+
+[NFR-02] Compatible with desktop and embedded platforms.
+
+[NFR-03] Configuration via external file (e.g. JSON, YAML).
+
+[NFR-04] Toggle processing stages via config flags.
+
+[NFR-05] Modular design (input → transform → align → blend → output).
+
+[NFR-06] Scalable to more than 4 input images.
+
+Testing and Validation:
+
+[TST-01] Provide test cases with synthetic alignment patterns.
+
+[TST-02] Validate real image stitching with visible overlap accuracy.
+
+[TST-03] Log diagnostics for alignment and blending quality.
+
+Optional/Advanced Features:
+
+[OPT-01] Integrate deep learning (e.g. flow-based or UNet-style models).
+
+[OPT-02] GPU acceleration (OpenCV CUDA or Vulkan).
+
+[OPT-03] Interactive GUI or preview interface.
+
+[OPT-04] Batch processing mode for multiple sets of images.
+
+Summary:
+
+A modular, configurable stitching pipeline that ingests four aligned or calibratable images,
+warps and blends them into a seamless panoramic image, and exports the result in standard formats.
+
+"""
