@@ -4,21 +4,70 @@ import math
 import sys
 
 
+def detect_and_compute(img):
+    """Detect keypoints and compute descriptors using ORB."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    orb = cv2.ORB_create(5000)
+    kps, des = orb.detectAndCompute(gray, None)
+    return kps, des
+
+
+def match_features(des1, des2, ratio=0.75):
+    """Match ORB descriptors using Hamming distance and ratio test."""
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    matches = bf.knnMatch(des1, des2, k=2)
+    good = []
+    for m, n in matches:
+        if m.distance < ratio * n.distance:
+            good.append(m)
+    return good
+
+
 def compute_focal_length(width, fov_deg):
     """Compute focal length from image width and horizontal FOV."""
     return width / (2.0 * math.tan(math.radians(fov_deg) / 2.0))
 
 
-def warp_cylindrical_with_yaw(img, f, yaw_rad, output_width):
-    """Warp an image onto a cylindrical surface and rotate by yaw."""
+def calibrate_cameras(images, f):
+    """Estimate rotation matrices for each camera using feature matching."""
+    h, w = images[0].shape[:2]
+    K = np.array([[f, 0, w / 2.0], [0, f, h / 2.0], [0, 0, 1]])
+
+    rotations = [np.eye(3)]
+    for i in range(1, len(images)):
+        kp1, des1 = detect_and_compute(images[i - 1])
+        kp2, des2 = detect_and_compute(images[i])
+        matches = match_features(des1, des2)
+        if len(matches) < 8:
+            rotations.append(rotations[-1])
+            continue
+
+        pts1 = np.float32([kp1[m.queryIdx].pt for m in matches])
+        pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
+
+        E, mask = cv2.findEssentialMat(pts2, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        if E is None:
+            rotations.append(rotations[-1])
+            continue
+
+        _, R, _, _ = cv2.recoverPose(E, pts2, pts1, K)
+        rotations.append(rotations[-1] @ R)
+
+    return rotations
+
+
+def warp_cylindrical(img, f, R, output_width):
+    """Warp an image onto a cylindrical surface using rotation R."""
     h, w = img.shape[:2]
-    # create mesh grid of pixel coordinates
     y_i, x_i = np.indices((h, w))
     x_c = (x_i - w / 2.0) / f
     y_c = (y_i - h / 2.0) / f
-    phi = np.arctan(x_c) + yaw_rad
-    # cylindrical vertical coordinate
-    rho = y_c / np.sqrt(x_c ** 2 + 1)
+    dirs = np.stack([x_c, y_c, np.ones_like(x_c)], axis=-1)
+    dirs /= np.linalg.norm(dirs, axis=-1, keepdims=True)
+    dirs = dirs @ R.T
+
+    phi = np.arctan2(dirs[..., 0], dirs[..., 2])
+    rho = dirs[..., 1] / np.sqrt(dirs[..., 0] ** 2 + dirs[..., 2] ** 2)
 
     xp = f * phi + output_width / 2.0
     yp = f * rho + h / 2.0
@@ -53,13 +102,13 @@ def main():
     f = compute_focal_length(w, 120.0)
     panorama_width = int(2 * math.pi * f)
 
+    rotations = calibrate_cameras(images, f)
+
     panorama = np.zeros((h, panorama_width, 3), dtype=images[0].dtype)
     mask_total = np.zeros((h, panorama_width), dtype=np.uint8)
 
-    yaw_angles = [0, 90, 180, 270]
-    for img, yaw_deg in zip(images, yaw_angles):
-        yaw_rad = math.radians(yaw_deg)
-        warped, mask = warp_cylindrical_with_yaw(img, f, yaw_rad, panorama_width)
+    for img, R in zip(images, rotations):
+        warped, mask = warp_cylindrical(img, f, R, panorama_width)
         panorama = blend(panorama, warped, mask)
         mask_total = cv2.max(mask_total, mask)
 
